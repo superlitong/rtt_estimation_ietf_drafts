@@ -1,0 +1,340 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!DOCTYPE rfc SYSTEM "rfc2629.dtd" [
+<!ENTITY RFC2119 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.2119.xml">
+<!ENTITY RFC2629 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.2629.xml">
+<!ENTITY RFC6298 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.6298.xml">
+<!ENTITY RFC1122 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.1122.xml">
+<!ENTITY RFC5681 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.5681.xml">
+<!ENTITY RFC4341 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.4341.xml">
+<!ENTITY RFC5690 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.5690.xml">
+<!ENTITY RFC3449 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.3449.xml">
+<!ENTITY RFC9000 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.9000.xml">
+<!ENTITY RFC9002 SYSTEM "http://xml2rfc.tools.ietf.org/public/rfc/bibxml/reference.RFC.9002.xml">
+]>
+
+<?rfc strict="yes" ?>
+<?rfc toc="yes"?>
+<?rfc tocdepth="4"?>
+<?rfc symrefs="yes"?>
+<?rfc sortrefs="yes"?>
+<?rfc compact="no"?>
+<?rfc subcompact="no" ?>
+<rfc ipr='trust200902' category="exp" docName="draft-li-quic-minimum-rtt-estimation-00">
+  <front>
+    <title abbrev="Low-ACK MinRTT Estimation">Minimum RTT Estimation Under Low ACK Frequency</title>
+    <author fullname="Tong Li" initials="T."  surname="Li">
+      <organization>Renmin University of China</organization>
+      <address>
+        <postal>
+          <street>Room 421, Information Building, Renmin University of China</street>
+          <street>Haidian District</street>
+		  <street>Beijing</street>
+          <street>China</street>
+        </postal>
+        <email>tong.li@ruc.edu.cn</email>
+      </address>
+    </author>
+
+    <author fullname="Ke Xu" initials="K." surname="Xu">
+      <organization>Tsinghua University</organization>
+      <address>
+        <postal>          
+          <street>30 Shuangqing Road</street>
+          <street>Haidian District</street>
+		      <street>Beijing</street>
+          <street>China</street>
+        </postal>
+        <email>xuke@tsinghua.edu.cn</email>
+      </address>
+    </author>
+
+    <author fullname="Bo Wu" initials="B."  surname="Wu">
+      <organization>Tencent</organization>
+      <address>
+        <postal>
+          <street>Tencent (Beijing) Headquarters Building</street>
+          <street>Haidian District</street>
+		  <street>Beijing</street>
+          <street>China</street>
+        </postal>
+        <email>brynwu@tencent.com</email>
+      </address>
+    </author>
+
+    <author fullname="Youjian Zhao" initials="Y." surname="Zhao">
+      <organization>Tsinghua University</organization>
+      <address>
+        <postal>          
+          <street>30 Shuangqing Road</street>
+          <street>Haidian District</street>
+		      <street>Beijing</street>
+          <street>China</street>
+        </postal>
+        <email>zhaoyoujian@tsinghua.edu.cn</email>
+      </address>
+    </author>
+
+    <date day="8" month="November" year="2025"/>
+    <area>wit</area>
+    <workgroup>QUIC</workgroup>
+ 
+    <abstract>
+      <t>In traditional acknowledgment mechanisms, the sender frequently "pulls" ACK packets, resulting in significant protocol control overhead. This leads to wasted CPU and I/O resources, contention for packet spectrum on half-duplex links (e.g., WLAN), and reverse-path congestion in asymmetric links (e.g., satellite network).
+Reducing the number of ACKs is essential in scenarios where ACK overhead is non-negligible. However, a lower ACK frequency can introduce biases in delay estimation, such as overestimating the minimum round-trip time (minRTT). This document proposes how to calibrate the estimation of the minRTT under low ACK frequency conditions.</t>
+    </abstract>
+  </front>
+
+  <middle>
+    <section title="Requirements Language">
+        <t>The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in <xref
+        target="RFC2119"></xref>.</t>
+    </section>
+
+	<section title="Overview of Standards on ACK Mechanism">
+	    <t><xref target="RFC9000"></xref> specifies a simple delayed ACK mechanism that a receiver can send an ACK for every other packet, and for every packet when reordering is observed, or when the max_ack_delay timer expires. However, this ACK mechanism may not match the number of ACKs to the transport's required intensity under different network conditions. For example, when the data throughput of a WLAN transport is extremely high, QUIC will generate a large number of ACKs. In this case, minimizing the ACK intensity of QUIC is not only a win for data throughput improvement but also a win for energy and CPU efficiency.</t>   	
+
+	    <t><xref target="RFC1122"></xref> and <xref target="RFC5681"></xref> were two core functionality standards that introduced delayed ACK, which was the default acknowledgment mechanism in most Linux distributions. <xref target="RFC4341"></xref> and <xref target="RFC5690"></xref> described an acknowledgment congestion control mechanism in which the minimum ACK frequency allowed is twice per send window. <xref target="RFC3449"></xref> discussed the imperfection and variability of TCP's acknowledgment mechanism because of asymmetric effects and recommended scaling ACK frequency as a mitigation to these effects. These RFCs reveal that the dependence on frequent ACKs is an artifact of current transport protocol designs rather than a fundamental requirement. Based on this insight, some work-in-progress IETF drafts have paid great attention to ACK scaling technologies in both TCP and QUIC working groups.</t>  
+
+    	<t>First of all, <xref target="ACK-PULL" format="default"/> proposed the TCP ACK pull mechanism, which allows a sender to request the ACK for a data segment to be sent without additional delay by the receiver. This helps in some cases when the delayed ACKs degrade transport performance.</t>   
+
+      <t>Instead of pulling more ACKs, <xref target="QUIC-SCALING" format="default"/> recommended reducing the ACK frequency by sending an ACK for at least every 10 received packets and <xref target="QUIC-SATCOM" format="default"/> recommended an ACK frequency of four ACKs every round-trip time (RTT), aiming to reduce link transmission costs for asymmetric paths.</t>   
+
+      <t>Different from using an empirical value of ACK frequency, instead, Li tried to improve the scalability by proposing a novel ACK mechanism named Tame ACK (TACK), whose frequency is a function of the bandwidth-delay product of network connections. The detailed TCP-based implementation (i.e., TCP-TACK) details and evaluation results in industrial applications have been shown in <xref target="Tong" format="default"/>. </t>
+	  
+	   <t>The recent work <xref target="IYENGAR-ACK" format="default"/> has been discussed in QUIC working group, it specifies an extension to QUIC that enables an endpoint to request its peer change its behavior when acknowledging at a low ACK frequency.</t>    
+
+    <t>Based on the observations, low ACK frequency not only addresses an industry-wide need but also demonstrates broad applicability across diverse operational environments.</t>
+
+	</section>
+	
+  <section title="Problem Statement">
+	    
+      <t>In this document, the minRTT is the minimum RTT samples observed at the sender for a given network path during a period of time. The minRTT is a fundamental state variable in transmission control, and its accuracy is critical for achieving both high throughput and low latency. For example, some congestion controllers depend on minRTT to estimate the congestion window <xref target="Neal" format="default"/>. minRTT is also used by QUIC loss detection to reject implausibly small RTT samples <xref target="RFC9002"></xref>. minRTT is further used to update the ACK frequency in <xref target="Tong" format="default"/>. </t>
+      
+      <t>An RTT estimation system contains a sender and a receiver. Ideally, when sending an ACK for every data packet, the minimum RTT sample can be computed by monitoring the per-packet RTT samples. However, the sender can hardly generate per-packet RTT samples in the case of sending fewer ACKs, which is the root cause of the minimum RTT estimation biases. When multiple packets carrying departure timestamps are transported between endpoints via the same path, an RTT of this path can be sampled at the sender upon receiving an ACK frame.  However, when sending fewer ACK frames, more data packets might be received during the ACK interval, generating only one RTT sample among multiple packets is likely to result in biases.  For example, a larger minimum RTT estimate.  In general, the higher the throughput, the larger the biases.  </t>
+    
+      <t>One alternative way to reduce biases can be that, each ACK frame carries multiple timestamps (as well as ACK delays in <xref target="RFC9002"></xref>) for the sender to generate more RTT samples.  However, (1) the overhead is high, which is unacceptable, especially for high-bandwidth transport.  Also, (2) the number of data packets might be far more than the maximum number of timestamps that an ACK frame is capable of carrying. </t>
+
+	</section>   
+
+	<section title="minRTT Estimation Under Low ACK Frequency">
+ 
+    <t>Since the receiver is capable of monitoring per-packet state, the one-way delay (OWD) of each packet can be easily computed according to the departure timestamps (carried in the TIMESTAMP frame) and the arrival timestamps of each packet. In this case, QUIC SHOULD adopt the OWD-based minRTT estimation.</t> 
+    
+    <t>The rationale is that the variation of OWD reflects the variation of RTT over near-symmetric links. The OWD-based minRTT estimation requires the sender to record the departure timestamp in each ack-eliciting packet. Meanwhile, at the receiver, the per-packet OWD samples SHOULD be computed upon packet arrivals and a function of computing the minimum OWD (minOWD) SHOULD be newly added. In this document, minOWD is the minimum OWD samples observed on the same network path during a period of time. The receiver then generates an ACK frame for the sender, in which the ACK delay and departure timestamp for the packet that achieves the minimum OWD is reported. The ACK delay is defined as the delay incurred between when the packet is received and when the ACK frame is sent. Based on the information reported by the incoming ACK frames and the ACK arrival timestamps, the sender can generate RTT samples and then compute minRTT accordingly.</t>
+
+  </section>	
+
+
+
+	<section title="Sender-Side Operation">
+		 
+		<t>Generally, the minRTT is calculated at the sender.</t>
+
+    <t> Before estimating the minRTT, the RTT samples should be computed based on the ACK frames collected during a period. Assume that a packet is sent by the sender at time t_1 and arrives at time t_3, and the ACK frame is sent at time t_4. The ACK delay can be computed at the receiver. For example, the receiver computes the ACK delay delta_t = t_4 - t_3, and syncs the ACK delay to the sender via an ACK frame. The ACK delay can also be computed at the sender. For example, the receiver directly syncs an ACK frame carrying t_4 and t_3 to the sender, the sender then computes the ACK delay delta_t = t_4 - t_3. </t>
+
+    <t> The sender therefore computes an RTT sample according to delta_t, t_1, and the arrival time (t_2) of the ACK frame, i.e., RTT_sample = t_2 − t_1 − delta_t. Measuring delta_t at the receiver assures an explicit correction for a more accurate RTT estimate. RTT samples SHOULD be smoothed using exponentially weighted moving average (EWMA) as specified in <xref target="RFC6298"/>. The sender then computes the minRTT according to these RTT samples during a period.</t>
+		 
+    <t>The sender SHOULD insert a TIMESTAMP frame into each packet for measuring OWD at the receiver.</t>
+ 	
+	</section>
+
+	<section title="Receiver-side Operation">
+		
+    <t>Currently, the QUIC receiver reports ACK delays for only the largest acknowledged packet in an ACK frame, hence an RTT sample is generated using only the largest acknowledged packet in the received ACK frame. For a more accurate minRTT estimate when sending fewer ACK frames, QUIC SHOULD adopt the OWD-based minRTT estimation. The OWD-based minRTT estimation requires the QUIC receiver to filter the departure timestamp for the packet that achieves the minOWD during the interval between two ACK frames and report the ACK delay of this packet. Whether redefining the meaning of ACK delay or not, depends on the negotiation between endpoints of the QUIC connection.</t>
+
+    <t>Upon packet arrivals, the receiver is capable of generating per-packet OWD samples according to the difference between the packet departure timestamp and packet arrival timestamp. The receiver then computes the minOWD by comparing the per-packet OWD samples. The OWD estimation does not require clock synchronization here because the relative values are adopted.</t>
+
+    <t> Afterwards, based on the ACK delay and the departure timestamp corresponding to the packet that achieves the minOWD, the sender calculates the RTT of this packet as a minimum RTT sample. Ultimately, the minRTT is computed according to these minimum RTT samples. </t>
+
+    <t>The ACK Delay field SHOULD be carried in the ACK Frame. Other fields carried in the ACK frame have the same meaning as defined in <xref target="RFC9002"></xref>.</t>
+	
+	</section>
+				
+	<section title="Modification to QUIC Protocol">
+		
+		<section title="Transport Parameter: timestamp-support">
+			
+			<t>A new field named timestamp-support should be added for negotiation between both parties on whether to sync packet departure timestamps in QUIC connection. The endpoints send this parameter during handshakes. Only when both parties agree, packet departure timestamp synchronization can be adopted.</t>
+
+      <t>timestamp-support (0x XX): This parameter has two values (0 or 1) specifying whether the sending endpoint is willing to sync packet departure timestamps. When the value is set as 1, it means that the sending endpoint wants to sync packet departure timestamps during connection. When the value is set as 0, it means that the sending endpoint does not support this function.</t>
+
+	  </section>
+			
+
+
+	<section title="TIMESTAMP Frame">
+           <t>Instead of the invasive way of adding a new field in the QUIC public packet header, it is RECOMMENDED that a new frame be added for exchanging the departure timestamp of each packet.</t>
+			     <t>A TIMESTAMP frame is shown in <xref target="timestamp-format" format="default"/>.
+                 <figure title="TIMESTAMP Frame" anchor="timestamp-format">
+                     <artwork name="" type="" align="left" alt=""><![CDATA[
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             0x XX (i)                            ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Departure Timestamp (i)                   ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+]]></artwork>
+                 </figure></t>
+
+			     <t>A TIMESTAMP frame contains the following fields:</t>				 
+				 <t>Departure Timestamp: An integer indicating the departure time of a packet.</t>                 
+				 <t>QUIC SHOULD carry the TIMESTAMP Frame in each packet.</t>	     	
+	    </section>	
+
+	<section title="ACK Delay Redefinition">
+ 
+             <t>The ACK Delay field is carried in the ACK Frame. Currently, the QUIC receiver reports ACK delays for only the largest acknowledged packet in an ACK frame, hence an RTT sample is generated using only the largest acknowledged packet in the received ACK frame. For a more accurate minRTT estimate when sending fewer ACK frames, QUIC SHOULD adopt the OWD-based minRTT estimation. The OWD-based minRTT estimation requires the QUIC receiver to filter the departure timestamp for the packet that achieves the minimum OWD during the interval between two ACK frames and report the ACK delay of this packet. Whether redefining the meaning of ACK delay or not, depends on the negotiation between endpoints of the QUIC connection.</t>
+
+            <t>In other words, QUIC SHOULD change the way of computing ACK Delay according to the arrival timestamp of the packet with minimum OWD instead of the arrival timestamp of the largest acknowledged packet.</t>
+
+	</section>
+	     	
+	</section>
+		
+	<section title="Security Considerations">
+	    <t>TBD</t>	
+	</section>
+	
+	<section title="IANA Considerations">
+	    <t>The value for the timestamp-support transport parameter and TIMESTAMP frame should be allocated.</t>	
+	</section>
+
+<section anchor="acknowledgements"><name>Acknowledgements</name>
+
+<t>Thanks to Kai Zheng, Kun Tan, Rahul Arvind Jadhav, Jiao Kang, and Keith Winstein
+for their reviews and suggestions.</t>
+
+</section>
+
+
+  </middle>
+
+  <back>
+
+
+    <references title="Normative References">
+        &RFC2119;
+        &RFC6298;
+        &RFC1122;
+        &RFC5681;          
+        &RFC4341;
+        &RFC5690;
+        &RFC3449;   
+        &RFC9000;
+        &RFC9002;   
+    </references>
+	  
+    <references title="Informative References">
+  
+	  <reference anchor="Tong">
+	    <front>
+	  	  
+		  <title>TACK: Improving Wireless Transport Performance by Taming Acknowledgments</title>
+          
+		  <author fullname="Tong Li"><organization /></author>
+		  <author fullname="Kai Zheng"><organization /></author>
+		  <author fullname="Ke Xu"><organization /></author>
+		  <author fullname="Rahul Arvind Jadhav"><organization /></author>		  
+		  <author fullname="Tao Xiong"><organization /></author>
+		  <author fullname="Keith Winstein"><organization /></author>
+		  <author fullname="Kun Tan"><organization /></author>
+          
+		  <date year="2020" />
+        </front>
+        <seriesInfo name="ACM SIGCOMM" value="2020:15-30"/>		
+	  </reference>
+
+	  <reference anchor="Neal">
+	    <front>
+	  	  
+		  <title>BBR: Congestion-based congestion control</title>
+          
+		  <author fullname="Neal Cardwell"><organization /></author>
+		  <author fullname="Yuchung Cheng"><organization /></author>
+      <author fullname="C Stephen Gunn"><organization /></author>
+		  <author fullname="Soheil Hassas Yeganeh"><organization /></author>
+      <author fullname="Van Jacobson"><organization /></author>
+  
+		  <date year="2016" />
+        </front>
+        <seriesInfo name="ACM QUEUE" value="14(5):20-53"/>		
+	  </reference>
+
+
+
+
+        <reference anchor="ACK-PULL">
+          <front>
+            <title>TCP ACK Pull</title>           
+            <author initials="C." surname="Gomez" fullname="Carles Gomez" role="editor">
+              <organization>UPC</organization>
+            </author>
+            <author initials="J." surname="Crowcroft" fullname="Jon Crowcroft" role="editor">
+              <organization>University of Cambridge</organization>
+            </author>
+            <date year="2019" month="November" day="4"/>
+          </front>
+		  <seriesInfo name="Internet-Draft" value="draft-gomez-tcpm-ack-pull-01"/>
+        </reference>
+
+         <reference anchor="QUIC-SCALING">
+          <front>
+            <title>Changing the Default QUIC ACK Policy</title>           
+            <author initials="G." surname="Fairhurst" fullname="Godred Fairhurst" role="editor">
+              <organization>University of Aberdeen</organization>
+            </author>
+            <author initials="A." surname="Custura" fullname="Ana Custura" role="editor">
+              <organization>University of Aberdeen</organization>
+            </author>
+            <author initials="T." surname="Jones" fullname="Tom Jones" role="editor">
+              <organization>University of Aberdeen</organization>
+            </author>
+            <date year="2020" month="September" day="14"/>
+          </front>
+		  <seriesInfo name="Internet-Draft" value="draft-fairhurst-quic-ack-scaling-03"/>
+        </reference>
+
+         <reference anchor="QUIC-SATCOM">
+          <front>
+            <title>QUIC for SATCOM</title>           
+            <author initials="N." surname="Kuhn" fullname="Nicolas Kuhn" role="editor">
+              <organization>CNES</organization>
+            </author>
+            <author initials="G." surname="Fairhurst" fullname="Godred Fairhurst" role="editor">
+              <organization>University of Aberdeen</organization>
+            </author>
+             <author initials="J." surname="Border" fullname="John Border" role="editor">
+              <organization>Hughes Network Systems, LLC</organization>
+            </author>
+            <author initials="E." surname="Stephan" fullname="Emile Stephan" role="editor">
+              <organization>Orange</organization>
+            </author>
+            <date year="2020" month="October" day="30"/>
+          </front>
+		  <seriesInfo name="Internet-Draft" value="draft-kuhn-quic-4-sat-06"/>
+        </reference>
+
+        	<reference anchor="IYENGAR-ACK">
+          <front>
+            <title>QUIC Acknowledgment Frequency</title>           
+            <author initials="J." surname="Iyengar" fullname="Jana Iyengar" role="editor">
+              <organization>Fastly</organization>
+            </author>
+            <author initials="I." surname="Swett" fullname="Ian Swett" role="editor">
+              <organization>Google</organization>
+            </author>
+            <author initials="M." surname="Kühlewind" fullname="Mirja Kühlewind" role="editor">
+              <organization>Ericsson</organization>
+            </author>
+            <date year="2025" month="November" day="6"/>
+          </front>
+		  <seriesInfo name="Internet-Draft" value="draft-ietf-quic-ack-frequency-13"/>
+        </reference>
+    </references>
+  	
+
+  </back>
+</rfc>

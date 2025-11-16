@@ -1,2 +1,5 @@
-# rtt_estimation_ietf_drafts
-Reducing the number of ACKs is essential in scenarios where ACK overhead is non-negligible.  However, a lower ACK frequency can introduce biases in delay estimation, such as overestimating the minimum round-trip time (minRTT).  This document proposes how to calibrate the estimation of the minRTT under low ACK frequency conditions.
+# standards
+
+Starndard drafts source files for [Minimum RTT Estimation Under Low ACK Frequency](https://datatracker.ietf.org/doc/html/draft-li-quic-minimum-rtt-estimation).
+
+Abstract: In traditional acknowledgment mechanisms, the sender frequently "pulls" ACK packets, resulting in significant protocol control overhead. This leads to wasted CPU and I/O resources, contention for packet spectrum on half-duplex links (e.g., WLAN), and reverse-path congestion in asymmetric links (e.g., satellite network). Reducing the number of ACKs is essential in scenarios where ACK overhead is non-negligible. However, a lower ACK frequency can introduce biases in delay estimation, such as overestimating the minimum round-trip time (minRTT). This document proposes how to calibrate the estimation of the minRTT under low ACK frequency conditions.
